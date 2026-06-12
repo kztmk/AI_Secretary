@@ -253,13 +253,16 @@ knowledgeChunks/{chunkId}
    ※ 未読フラグではなく Firestore の emails/{messageId} 存在確認で処理済み判定する
    ※ GmailAppのラベルはスレッド単位のため、処理済みラベル付きスレッドも再スキャンして新規返信を拾う
    ※ 1回の処理上限 50スレッド/クエリ。超過分は次回に持ち越し
-3. スレッド内のInbox内メッセージだけを対象にし、既存doc・検索期間外メッセージ・送信済み返信を除外
+3. スレッド内のInbox内メッセージだけを対象にし、送信済み返信を除外。
+   既存docは documents:batchGet で一括確認して除外（メッセージごとのGETはしない）
 4. 件名・本文からカテゴリを判定（キーワードマッチ）
 5. Firestore REST API で emails コレクションに保存（docId = messageId で upsert）
    - inquiry / bug は draftStatus: "requested" をセット
    - それ以外は draftStatus: "none"
+   - 検索期間（SEARCH_WINDOW）より古いメッセージは、再浮上したスレッドの
+     文脈保存として保存するが draftStatus: "none"（下書き生成対象外）
    - 既存docは保存し直さず、draftStatus を requested / none に巻き戻さない
-6. 処理済みメールのスレッドに secretary-processed ラベルを付与
+6. 処理済みスレッドに secretary-processed ラベルを一括付与（addToThreads・100スレッドずつ）
 7. 集計（当日の新規・解約・問い合わせ数）を算出
 8. Firestore REST API で reports/daily_{YYYY-MM-DD} に upsert
 ```

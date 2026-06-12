@@ -42,21 +42,47 @@ function authHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${ScriptApp.getOAuthToken()}` };
 }
 
-export function documentExists(projectId: string, collection: string, docId: string): boolean {
-  const url = `${BASE_URL}/${databasePath(projectId)}/documents/${collection}/${encodeURIComponent(docId)}`;
-  const res = UrlFetchApp.fetch(url, {
-    method: "get",
-    headers: authHeaders(),
-    muteHttpExceptions: true,
-  });
-  const code = res.getResponseCode();
-  if (code === 200) {
-    return true;
+/** documents:batchGet に1回で渡すドキュメント数の上限（ペイロード・レスポンス抑制） */
+const BATCH_GET_CHUNK = 100;
+
+interface BatchGetResultRow {
+  found?: { name: string };
+  missing?: string;
+}
+
+/**
+ * 渡したdocIdのうちFirestoreに存在するものを返す。
+ * 1件ずつGETせずbatchGetでまとめて確認し、HTTPリクエスト数を
+ * メッセージ件数からチャンク数（最大でも数回）に抑える。
+ */
+export function getExistingDocIds(
+  projectId: string,
+  collection: string,
+  docIds: string[],
+): Record<string, true> {
+  const existing: Record<string, true> = {};
+  const namePrefix = `${databasePath(projectId)}/documents/${collection}/`;
+  for (let i = 0; i < docIds.length; i += BATCH_GET_CHUNK) {
+    const chunk = docIds.slice(i, i + BATCH_GET_CHUNK);
+    const rows = fetchJson(`${BASE_URL}/${databasePath(projectId)}/documents:batchGet`, {
+      method: "post",
+      headers: authHeaders(),
+      contentType: "application/json",
+      payload: JSON.stringify({ documents: chunk.map((id) => `${namePrefix}${id}`) }),
+    });
+    if (!Array.isArray(rows)) {
+      // 黙って「全件未存在」と解釈すると既存docへ再upsertして
+      // draftStatusを巻き戻すため、中断して異常を露見させる
+      throw new Error(`Firestore batchGet: 予期しないレスポンス形式です: ${JSON.stringify(rows).slice(0, 200)}`);
+    }
+    for (const row of rows as BatchGetResultRow[]) {
+      const name = row.found?.name;
+      if (name) {
+        existing[name.slice(name.lastIndexOf("/") + 1)] = true;
+      }
+    }
   }
-  if (code === 404) {
-    return false;
-  }
-  throw new Error(`Firestore API error ${code}: ${res.getContentText().slice(0, 500)}`);
+  return existing;
 }
 
 /**
