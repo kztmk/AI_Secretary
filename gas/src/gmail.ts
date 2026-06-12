@@ -40,17 +40,25 @@ export function runPoll(): void {
   let scannedThreads = 0;
 
   for (let i = 0; i < queries.length; i++) {
-    const threads = GmailApp.search(queries[i], 0, cfg.maxThreadsPerRun);
-    for (const thread of threads) {
+    const threads = GmailApp.search(queries[i], 0, cfg.maxThreadsPerRun).filter((thread) => {
       const threadId = thread.getId();
       if (seenThreadIds[threadId]) {
-        continue;
+        return false;
       }
       seenThreadIds[threadId] = true;
-      scannedThreads += 1;
+      return true;
+    });
+    if (threads.length === 0) {
+      continue;
+    }
+    scannedThreads += threads.length;
 
+    // スレッドごとのgetMessages()は遅延フェッチが多発するため、
+    // 重複除去後に一括取得する（threadsと同じ並びで返る）
+    const messagesByThread = GmailApp.getMessagesForThreads(threads);
+    for (let j = 0; j < threads.length; j++) {
       const oldContext: GoogleAppsScript.Gmail.GmailMessage[] = [];
-      for (const message of thread.getMessages()) {
+      for (const message of messagesByThread[j]) {
         if (!message.isInInbox()) {
           skipped += 1;
         } else if (isWithinSearchWindow(message, windowCutoff)) {
@@ -61,14 +69,14 @@ export function runPoll(): void {
           skipped += 1;
         }
       }
-      // getMessages()は古い順なので末尾＝直近。文脈保存の件数を絞り、
+      // メッセージは古い順なので末尾＝直近。文脈保存の件数を絞り、
       // 巨大スレッド再浮上時にupsertが急増して6分制限を圧迫するのを防ぐ
       const kept = oldContext.slice(-MAX_CONTEXT_MESSAGES);
       skipped += oldContext.length - kept.length;
       for (const message of kept) {
         candidates.push(message);
       }
-      threadsToLabel.push(thread);
+      threadsToLabel.push(threads[j]);
     }
   }
 
@@ -130,9 +138,21 @@ function getSearchWindowCutoff(searchWindow: string): Date {
   if (unit === "d") {
     cutoff.setDate(cutoff.getDate() - amount);
   } else if (unit === "m") {
-    cutoff.setMonth(cutoff.getMonth() - amount);
+    const targetMonth = cutoff.getMonth() - amount;
+    cutoff.setMonth(targetMonth);
+    // 月末日からの減算で存在しない日付（例: 2月31日）になると翌月へ
+    // 繰り上がり、カットオフが意図より未来になる。前月末日に補正する
+    const expectedMonth = ((targetMonth % 12) + 12) % 12;
+    if (cutoff.getMonth() !== expectedMonth) {
+      cutoff.setDate(0);
+    }
   } else {
+    const originalMonth = cutoff.getMonth();
     cutoff.setFullYear(cutoff.getFullYear() - amount);
+    // うるう年の2月29日から平年へ移ると3月1日に繰り上がるため同様に補正
+    if (cutoff.getMonth() !== originalMonth) {
+      cutoff.setDate(0);
+    }
   }
   return cutoff;
 }

@@ -25,8 +25,13 @@ const RULES: ReadonlyArray<{ category: Category; keywords: ReadonlyArray<string>
   },
 ];
 
+/** 分類キーワードは冒頭に現れるのが通例のため、本文は先頭のみ判定する */
+const CLASSIFY_BODY_MAX_LENGTH = 10000;
+
 export function classify(subject: string, body: string): Category {
-  const text = `${subject}\n${body}`.toLowerCase();
+  // 巨大な本文（自動送信ログ等）全体のtoLowerCase()によるメモリ圧迫を避ける。
+  // 取りこぼしても "other"（下書き生成対象外）に落ちるだけで安全
+  const text = `${subject}\n${body.slice(0, CLASSIFY_BODY_MAX_LENGTH)}`.toLowerCase();
   for (const rule of RULES) {
     if (rule.keywords.some((keyword) => text.includes(keyword.toLowerCase()))) {
       return rule.category;
