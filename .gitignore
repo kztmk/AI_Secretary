@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.clasp.json
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
