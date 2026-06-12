@@ -17,19 +17,23 @@ export interface Config {
 export function getConfig(): Config {
   const props = PropertiesService.getScriptProperties();
   // コピペ由来の前後空白・末尾スラッシュはREST APIのURLを壊すため除去する
-  const projectId = props.getProperty("FIREBASE_PROJECT_ID")?.trim().replace(/\/+$/, "");
+  const projectId = props
+    .getProperty('FIREBASE_PROJECT_ID')
+    ?.trim()
+    ?.replace(/\/+$/, '');
   if (!projectId) {
     throw new Error(
-      "Script Property FIREBASE_PROJECT_ID が未設定です。" +
-        "GASエディタの「プロジェクトの設定 > スクリプト プロパティ」で設定してください。",
+      'Script Property FIREBASE_PROJECT_ID が未設定です。' +
+        'GASエディタの「プロジェクトの設定 > スクリプト プロパティ」で設定してください。',
     );
   }
   return {
     projectId,
     // 空文字や空白だけの設定はラベル作成・検索を壊すため既定値に倒す
-    processedLabel: props.getProperty("PROCESSED_LABEL")?.trim() || "secretary-processed",
-    maxThreadsPerRun: readPositiveInt(props, "MAX_THREADS_PER_RUN", 50),
-    searchWindow: readSearchWindow(props, "SEARCH_WINDOW", "3d"),
+    processedLabel:
+      props.getProperty('PROCESSED_LABEL')?.trim() || 'secretary-processed',
+    maxThreadsPerRun: readPositiveInt(props, 'MAX_THREADS_PER_RUN', 50),
+    searchWindow: readSearchWindow(props, 'SEARCH_WINDOW', '3d'),
   };
 }
 
@@ -49,7 +53,9 @@ function readSearchWindow(
   }
   const trimmed = raw.trim();
   if (!/^\d+[dmy]$/i.test(trimmed)) {
-    Logger.log(`Script Property ${key} の値 "${raw}" は newer_than: 形式（例: 3d）ではないため、既定値 ${fallback} を使います`);
+    Logger.log(
+      `Script Property ${key} の値 "${raw}" は newer_than: 形式（例: 3d）ではないため、既定値 ${fallback} を使います`,
+    );
     return fallback;
   }
   return trimmed;
@@ -67,7 +73,9 @@ function readPositiveInt(
   }
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed <= 0) {
-    Logger.log(`Script Property ${key} の値 "${raw}" は正の整数ではないため、既定値 ${fallback} を使います`);
+    Logger.log(
+      `Script Property ${key} の値 "${raw}" は正の整数ではないため、既定値 ${fallback} を使います`,
+    );
     return fallback;
   }
   return parsed;
