@@ -259,8 +259,9 @@ knowledgeChunks/{chunkId}
 5. Firestore REST API で emails コレクションに保存（docId = messageId で upsert）
    - inquiry / bug は draftStatus: "requested" をセット
    - それ以外は draftStatus: "none"
-   - 検索期間（SEARCH_WINDOW）より古いメッセージは、再浮上したスレッドの
-     文脈保存として保存するが draftStatus: "none"（下書き生成対象外）
+   - 検索期間（SEARCH_WINDOW）より古いメッセージは、再浮上した未処理スレッドの
+     文脈保存として直近10件/スレッドまで保存するが draftStatus: "none"（下書き生成対象外）
+   - SEARCH_WINDOW が解釈不能な場合は既定の3日をカットオフに使う（安全側）
    - 既存docは保存し直さず、draftStatus を requested / none に巻き戻さない
 6. 処理済みスレッドに secretary-processed ラベルを一括付与（addToThreads・100スレッドずつ）
 7. 集計（当日の新規・解約・問い合わせ数）を算出

@@ -5,6 +5,8 @@ import { countEmailsByCategorySince, getExistingDocIds, upsertDocument } from ".
 const SUMMARY_MAX_LENGTH = 200;
 /** GmailLabel.addToThreads が1回で受け付けるスレッド数の上限 */
 const ADD_TO_THREADS_MAX = 100;
+/** 再浮上した未処理スレッドで、期間外メッセージを文脈として保存する上限（スレッドあたり） */
+const MAX_CONTEXT_MESSAGES = 10;
 
 /** 定時巡回の本体。main.tsのpollGmail()から呼ばれる */
 export function runPoll(): void {
@@ -21,14 +23,14 @@ export function runPoll(): void {
     `${baseQuery} label:${labelQueryValue}`,
   ];
 
-  // cutoffは処理済みスレッドの再スキャン（クエリ2）にだけ適用する。
-  // 未処理スレッドは、SEARCH_WINDOWより古い初回メールが返信でスレッドごと
-  // 再浮上したケースを取りこぼさないようcutoffなしで全件候補にする
-  // （既存docはbatchGetの結果で除外されるため二重保存はない）。
-  // ただし期間外の過去メッセージは文脈保存のみで、下書き生成対象には
-  // しない（saveEmailのwithinSearchWindow参照）。
+  // SEARCH_WINDOWより古いメッセージの扱い:
+  // - クエリ2（処理済みスレッドの再スキャン）では候補から外す
+  // - クエリ1（未処理スレッド）では、返信でスレッドごと再浮上したケースの
+  //   文脈保存として直近 MAX_CONTEXT_MESSAGES 件まで候補にする
+  //   （既存docはbatchGetの結果で除外されるため二重保存はなく、
+  //    期間外メッセージはsaveEmailで必ず draftStatus: "none" になる）
   const windowCutoff = getSearchWindowCutoff(cfg.searchWindow);
-  const cutoffs: Array<Date | null> = [null, windowCutoff];
+  const keepsOldContext = [true, false];
 
   // 第1パス: HTTPを発行せず、保存候補メッセージとラベル対象スレッドを集める
   const seenThreadIds: Record<string, true> = {};
@@ -46,12 +48,25 @@ export function runPoll(): void {
       }
       seenThreadIds[threadId] = true;
       scannedThreads += 1;
+
+      const oldContext: GoogleAppsScript.Gmail.GmailMessage[] = [];
       for (const message of thread.getMessages()) {
-        if (isCandidateMessage(message, cutoffs[i])) {
+        if (!message.isInInbox()) {
+          skipped += 1;
+        } else if (isWithinSearchWindow(message, windowCutoff)) {
           candidates.push(message);
+        } else if (keepsOldContext[i]) {
+          oldContext.push(message);
         } else {
           skipped += 1;
         }
+      }
+      // getMessages()は古い順なので末尾＝直近。文脈保存の件数を絞り、
+      // 巨大スレッド再浮上時にupsertが急増して6分制限を圧迫するのを防ぐ
+      const kept = oldContext.slice(-MAX_CONTEXT_MESSAGES);
+      skipped += oldContext.length - kept.length;
+      for (const message of kept) {
+        candidates.push(message);
       }
       threadsToLabel.push(thread);
     }
@@ -86,40 +101,32 @@ export function runPoll(): void {
   Logger.log(`pollGmail: ${scannedThreads}スレッド・${saved}件のメールを処理しました（${skipped}件スキップ）`);
 }
 
-function isCandidateMessage(
-  message: GoogleAppsScript.Gmail.GmailMessage,
-  cutoff: Date | null,
-): boolean {
-  if (!message.isInInbox()) {
-    return false;
-  }
-  return cutoff === null || message.getDate().getTime() >= cutoff.getTime();
-}
-
 function isWithinSearchWindow(
   message: GoogleAppsScript.Gmail.GmailMessage,
-  windowCutoff: Date | null,
+  windowCutoff: Date,
 ): boolean {
-  // SEARCH_WINDOWが解釈不能（null）の場合は期間内扱い＝従来どおり
-  return windowCutoff === null || message.getDate().getTime() >= windowCutoff.getTime();
+  return message.getDate().getTime() >= windowCutoff.getTime();
 }
 
 function quoteGmailSearchValue(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
-function getSearchWindowCutoff(searchWindow: string): Date | null {
+function getSearchWindowCutoff(searchWindow: string): Date {
   const match = searchWindow.trim().match(/^(\d+)([dmy])$/i);
-  if (!match) {
-    Logger.log(`SEARCH_WINDOW "${searchWindow}" の形式を解釈できないため、メッセージ日付の追加フィルタを省略します`);
-    return null;
-  }
-  const amount = Number(match[1]);
-  const unit = match[2].toLowerCase();
   const cutoff = new Date();
   // 実行時刻に依存した境界の揺れを避けるため当日0時に揃える。
   // newer_than:より過去寄り（緩い側）に倒れるため取りこぼしは増えない
   cutoff.setHours(0, 0, 0, 0);
+  if (!match) {
+    // 「全件期間内扱い」に倒すと古いメールまでrequestedになり下書き生成
+    // 対象に入るため、安全側の既定3日（SEARCH_WINDOWの既定値）に倒す
+    Logger.log(`SEARCH_WINDOW "${searchWindow}" の形式を解釈できないため、既定の3日をカットオフに使います`);
+    cutoff.setDate(cutoff.getDate() - 3);
+    return cutoff;
+  }
+  const amount = Number(match[1]);
+  const unit = match[2].toLowerCase();
   if (unit === "d") {
     cutoff.setDate(cutoff.getDate() - amount);
   } else if (unit === "m") {
