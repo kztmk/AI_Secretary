@@ -40,14 +40,14 @@ export function runPoll(): void {
   let scannedThreads = 0;
 
   for (let i = 0; i < queries.length; i++) {
-    const threads = GmailApp.search(queries[i], 0, cfg.maxThreadsPerRun).filter((thread) => {
+    const threads: GoogleAppsScript.Gmail.GmailThread[] = [];
+    for (const thread of GmailApp.search(queries[i], 0, cfg.maxThreadsPerRun)) {
       const threadId = thread.getId();
-      if (seenThreadIds[threadId]) {
-        return false;
+      if (!seenThreadIds[threadId]) {
+        seenThreadIds[threadId] = true;
+        threads.push(thread);
       }
-      seenThreadIds[threadId] = true;
-      return true;
-    });
+    }
     if (threads.length === 0) {
       continue;
     }
