@@ -1,6 +1,6 @@
 import { classify } from "./classifier";
 import { getConfig, type Config } from "./config";
-import { countEmailsByCategorySince, upsertDocument } from "./firestore";
+import { countEmailsByCategorySince, documentExists, upsertDocument } from "./firestore";
 
 const SUMMARY_MAX_LENGTH = 200;
 
@@ -9,24 +9,96 @@ export function runPoll(): void {
   const cfg = getConfig();
   const label = getOrCreateLabel(cfg.processedLabel);
 
-  // 未読フラグではなく処理済みラベルで管理（既読化のタイミングに依存しない）。
+  // 未読フラグではなくFirestoreのmessageIdで処理済み判定する。
   // category:primary でプロモーション等を入口で除外（仕様書セクション14）。
-  const query = `in:inbox category:primary -label:${cfg.processedLabel} newer_than:${cfg.searchWindow}`;
-  const threads = GmailApp.search(query, 0, cfg.maxThreadsPerRun);
+  // 通常の未処理スレッドを優先し、処理済みスレッドへの新規返信は別クエリで拾う。
+  const baseQuery = `in:inbox category:primary newer_than:${cfg.searchWindow}`;
+  const labelQueryValue = quoteGmailSearchValue(cfg.processedLabel);
+  const queries = [
+    `${baseQuery} -label:${labelQueryValue}`,
+    `${baseQuery} label:${labelQueryValue}`,
+  ];
 
   let saved = 0;
-  for (const thread of threads) {
-    for (const message of thread.getMessages()) {
-      saveEmail(cfg, message);
-      saved += 1;
+  let skipped = 0;
+  let scannedThreads = 0;
+  const seenThreadIds: Record<string, true> = {};
+  const cutoff = getSearchWindowCutoff(cfg.searchWindow);
+
+  for (const query of queries) {
+    const threads = GmailApp.search(query, 0, cfg.maxThreadsPerRun);
+    for (const thread of threads) {
+      const threadId = thread.getId();
+      if (seenThreadIds[threadId]) {
+        continue;
+      }
+      seenThreadIds[threadId] = true;
+      scannedThreads += 1;
+
+      const result = processThread(cfg, thread, cutoff);
+      saved += result.saved;
+      skipped += result.skipped;
+      thread.addLabel(label);
     }
-    // GmailAppのラベルはスレッド単位。処理済みスレッドへの新規返信は
-    // 検索から漏れる既知の制限（gas/README.md参照）
-    thread.addLabel(label);
   }
 
   updateDailyReport(cfg);
-  Logger.log(`pollGmail: ${threads.length}スレッド・${saved}件のメールを処理しました`);
+  Logger.log(`pollGmail: ${scannedThreads}スレッド・${saved}件のメールを処理しました（${skipped}件スキップ）`);
+}
+
+function processThread(
+  cfg: Config,
+  thread: GoogleAppsScript.Gmail.GmailThread,
+  cutoff: Date | null,
+): { saved: number; skipped: number } {
+  let saved = 0;
+  let skipped = 0;
+  for (const message of thread.getMessages()) {
+    if (shouldProcessMessage(cfg, message, cutoff)) {
+      saveEmail(cfg, message);
+      saved += 1;
+    } else {
+      skipped += 1;
+    }
+  }
+  return { saved, skipped };
+}
+
+function shouldProcessMessage(
+  cfg: Config,
+  message: GoogleAppsScript.Gmail.GmailMessage,
+  cutoff: Date | null,
+): boolean {
+  if (!message.isInInbox()) {
+    return false;
+  }
+  if (cutoff !== null && message.getDate().getTime() < cutoff.getTime()) {
+    return false;
+  }
+  return !documentExists(cfg.projectId, "emails", message.getId());
+}
+
+function quoteGmailSearchValue(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function getSearchWindowCutoff(searchWindow: string): Date | null {
+  const match = searchWindow.trim().match(/^(\d+)([dmy])$/i);
+  if (!match) {
+    Logger.log(`SEARCH_WINDOW "${searchWindow}" の形式を解釈できないため、メッセージ日付の追加フィルタを省略します`);
+    return null;
+  }
+  const amount = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const cutoff = new Date();
+  if (unit === "d") {
+    cutoff.setDate(cutoff.getDate() - amount);
+  } else if (unit === "m") {
+    cutoff.setMonth(cutoff.getMonth() - amount);
+  } else {
+    cutoff.setFullYear(cutoff.getFullYear() - amount);
+  }
+  return cutoff;
 }
 
 function saveEmail(cfg: Config, message: GoogleAppsScript.Gmail.GmailMessage): void {
@@ -35,8 +107,8 @@ function saveEmail(cfg: Config, message: GoogleAppsScript.Gmail.GmailMessage): v
   const category = classify(subject, body);
   const needsDraft = category === "inquiry" || category === "bug";
 
-  // docId = GmailのmessageId。巡回が重複してもupsertで冪等（仕様書セクション5）
-  // getDate()はGoogleAppsScript.Base.Date型のため標準のDateに変換する
+  // docId = GmailのmessageId。既存docはshouldProcessMessageで除外するため、
+  // Phase3以降のdraftStatusをrequested/noneへ巻き戻さない。
   upsertDocument(cfg.projectId, "emails", message.getId(), {
     receivedAt: new Date(message.getDate().getTime()),
     category,
@@ -65,8 +137,9 @@ function updateDailyReport(cfg: Config): void {
   const tz = Session.getScriptTimeZone();
   const now = new Date();
   const dateKey = Utilities.formatDate(now, tz, "yyyy-MM-dd");
-  // スクリプトのタイムゾーンでの当日0時
-  const startOfDay = new Date(Utilities.formatDate(now, tz, "yyyy-MM-dd'T'00:00:00XXX"));
+  // 当日0時。GAS(V8)のDateローカルタイムゾーンはappsscript.jsonのtimeZoneに
+  // 一致するため、ローカル時刻ベースの組み立てで足りる
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
   const counts = countEmailsByCategorySince(cfg.projectId, startOfDay);
 

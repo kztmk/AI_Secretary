@@ -42,6 +42,23 @@ function authHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${ScriptApp.getOAuthToken()}` };
 }
 
+export function documentExists(projectId: string, collection: string, docId: string): boolean {
+  const url = `${BASE_URL}/${databasePath(projectId)}/documents/${collection}/${encodeURIComponent(docId)}`;
+  const res = UrlFetchApp.fetch(url, {
+    method: "get",
+    headers: authHeaders(),
+    muteHttpExceptions: true,
+  });
+  const code = res.getResponseCode();
+  if (code === 200) {
+    return true;
+  }
+  if (code === 404) {
+    return false;
+  }
+  throw new Error(`Firestore API error ${code}: ${res.getContentText().slice(0, 500)}`);
+}
+
 /**
  * updateMask付きPATCH。docIdが同じなら何度実行しても同じ結果になる（upsert）。
  * updateMaskを付けない素のPATCHはドキュメント全体を置き換えてしまい、
@@ -101,10 +118,15 @@ export function countEmailsByCategorySince(projectId: string, since: Date): Reco
     headers: authHeaders(),
     contentType: "application/json",
     payload: JSON.stringify(body),
-  }) as RunQueryResultRow[];
+  });
+  if (!Array.isArray(rows)) {
+    // 黙って0件扱いにするとreports/daily_*を0件で上書きしてしまうため、
+    // 予期しないレスポンスは集計を中断して異常を露見させる
+    throw new Error(`Firestore runQuery: 予期しないレスポンス形式です: ${JSON.stringify(rows).slice(0, 200)}`);
+  }
 
   const counts: Record<Category, number> = { subscription: 0, cancel: 0, inquiry: 0, bug: 0, other: 0 };
-  for (const row of rows) {
+  for (const row of rows as RunQueryResultRow[]) {
     const category = row.document?.fields?.category?.stringValue;
     if (category && category in counts) {
       counts[category as Category] += 1;

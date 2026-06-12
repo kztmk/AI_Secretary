@@ -26,7 +26,25 @@ export function getConfig(): Config {
   return {
     projectId,
     processedLabel: props.getProperty("PROCESSED_LABEL") ?? "secretary-processed",
-    maxThreadsPerRun: Number(props.getProperty("MAX_THREADS_PER_RUN") ?? "50"),
+    maxThreadsPerRun: readPositiveInt(props, "MAX_THREADS_PER_RUN", 50),
     searchWindow: props.getProperty("SEARCH_WINDOW") ?? "3d",
   };
+}
+
+/** 不正値（数値以外・0以下・小数）は警告を残して既定値にフォールバックする */
+function readPositiveInt(
+  props: GoogleAppsScript.Properties.Properties,
+  key: string,
+  fallback: number,
+): number {
+  const raw = props.getProperty(key);
+  if (raw === null) {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    Logger.log(`Script Property ${key} の値 "${raw}" は正の整数ではないため、既定値 ${fallback} を使います`);
+    return fallback;
+  }
+  return parsed;
 }
