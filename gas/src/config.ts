@@ -16,7 +16,8 @@ export interface Config {
  */
 export function getConfig(): Config {
   const props = PropertiesService.getScriptProperties();
-  const projectId = props.getProperty("FIREBASE_PROJECT_ID");
+  // コピペ由来の前後空白・末尾スラッシュはREST APIのURLを壊すため除去する
+  const projectId = props.getProperty("FIREBASE_PROJECT_ID")?.trim().replace(/\/+$/, "");
   if (!projectId) {
     throw new Error(
       "Script Property FIREBASE_PROJECT_ID が未設定です。" +
@@ -25,7 +26,8 @@ export function getConfig(): Config {
   }
   return {
     projectId,
-    processedLabel: props.getProperty("PROCESSED_LABEL") ?? "secretary-processed",
+    // 空文字や空白だけの設定はラベル作成・検索を壊すため既定値に倒す
+    processedLabel: props.getProperty("PROCESSED_LABEL")?.trim() || "secretary-processed",
     maxThreadsPerRun: readPositiveInt(props, "MAX_THREADS_PER_RUN", 50),
     searchWindow: readSearchWindow(props, "SEARCH_WINDOW", "3d"),
   };
