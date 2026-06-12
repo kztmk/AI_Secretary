@@ -4,6 +4,8 @@ export type Category = "subscription" | "cancel" | "inquiry" | "bug" | "other";
  * キーワードマッチによる分類ルール。先頭のルールほど優先される。
  * bug を cancel/subscription より先に置くのは「解約画面でエラーが出る」
  * のような複合メールを不具合として拾うため。
+ * 英字キーワードは必ず小文字で定義する（判定対象をtoLowerCase()した上で
+ * キーワード側は変換せず比較するため）。
  * 将来Claude分類に昇格する際はこのモジュールごと差し替える（仕様書セクション15）。
  */
 const RULES: ReadonlyArray<{ category: Category; keywords: ReadonlyArray<string> }> = [
@@ -33,7 +35,7 @@ export function classify(subject: string, body: string): Category {
   // 取りこぼしても "other"（下書き生成対象外）に落ちるだけで安全
   const text = `${subject}\n${body.slice(0, CLASSIFY_BODY_MAX_LENGTH)}`.toLowerCase();
   for (const rule of RULES) {
-    if (rule.keywords.some((keyword) => text.includes(keyword.toLowerCase()))) {
+    if (rule.keywords.some((keyword) => text.includes(keyword))) {
       return rule.category;
     }
   }
