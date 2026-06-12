@@ -76,7 +76,10 @@ export function runPoll(): void {
       for (const message of kept) {
         candidates.push(message);
       }
-      threadsToLabel.push(threads[j]);
+      // クエリ2（label:）のスレッドは付与済みのため、ラベル対象はクエリ1のみ
+      if (i === 0) {
+        threadsToLabel.push(threads[j]);
+      }
     }
   }
 

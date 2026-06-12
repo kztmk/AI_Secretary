@@ -27,8 +27,30 @@ export function getConfig(): Config {
     projectId,
     processedLabel: props.getProperty("PROCESSED_LABEL") ?? "secretary-processed",
     maxThreadsPerRun: readPositiveInt(props, "MAX_THREADS_PER_RUN", 50),
-    searchWindow: props.getProperty("SEARCH_WINDOW") ?? "3d",
+    searchWindow: readSearchWindow(props, "SEARCH_WINDOW", "3d"),
   };
+}
+
+/**
+ * newer_than:にそのまま埋め込める形式（Nd/Nm/Ny）だけを通す。
+ * 不正値を素通しするとGmail検索クエリ自体が壊れ、カットオフ計算との
+ * 不整合も生むため、読み出し時点で警告してフォールバックする
+ */
+function readSearchWindow(
+  props: GoogleAppsScript.Properties.Properties,
+  key: string,
+  fallback: string,
+): string {
+  const raw = props.getProperty(key);
+  if (raw === null) {
+    return fallback;
+  }
+  const trimmed = raw.trim();
+  if (!/^\d+[dmy]$/i.test(trimmed)) {
+    Logger.log(`Script Property ${key} の値 "${raw}" は newer_than: 形式（例: 3d）ではないため、既定値 ${fallback} を使います`);
+    return fallback;
+  }
+  return trimmed;
 }
 
 /** 不正値（数値以外・0以下・小数）は警告を残して既定値にフォールバックする */
