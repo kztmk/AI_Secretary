@@ -85,6 +85,54 @@ export function getExistingDocIds(
   return existing;
 }
 
+export interface WriteOp {
+  docId: string;
+  data: DocumentData;
+}
+
+/** documents:commit に1回で渡す書き込み数の上限（APIの上限は500） */
+const COMMIT_CHUNK = 100;
+
+/**
+ * 複数ドキュメントを documents:commit で一括upsertする。
+ * 1件ずつPATCHすると件数ぶん同期HTTPが走り6分制限を圧迫するため、
+ * チャンク単位の1リクエストにまとめる。updateMaskの意味論は
+ * upsertDocumentと同じ（列挙したフィールドだけ更新・なければ作成）。
+ */
+export function commitUpsertDocuments(
+  projectId: string,
+  collection: string,
+  writes: WriteOp[],
+): void {
+  if (writes.length === 0) {
+    return;
+  }
+  const namePrefix = `${databasePath(projectId)}/documents/${collection}/`;
+  for (let i = 0; i < writes.length; i += COMMIT_CHUNK) {
+    const chunk = writes.slice(i, i + COMMIT_CHUNK);
+    const body = {
+      writes: chunk.map((write) => {
+        const fields: Record<string, FirestoreValue> = {};
+        const fieldPaths: string[] = [];
+        for (const key of Object.keys(write.data)) {
+          fields[key] = toFirestoreValue(write.data[key]);
+          fieldPaths.push(key);
+        }
+        return {
+          update: { name: `${namePrefix}${write.docId}`, fields },
+          updateMask: { fieldPaths },
+        };
+      }),
+    };
+    fetchJson(`${BASE_URL}/${databasePath(projectId)}/documents:commit`, {
+      method: "post",
+      headers: authHeaders(),
+      contentType: "application/json",
+      payload: JSON.stringify(body),
+    });
+  }
+}
+
 /**
  * updateMask付きPATCH。docIdが同じなら何度実行しても同じ結果になる（upsert）。
  * updateMaskを付けない素のPATCHはドキュメント全体を置き換えてしまい、

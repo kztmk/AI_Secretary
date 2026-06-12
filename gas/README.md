@@ -9,7 +9,8 @@ TypeScript + Vite + [@gas-plugin/unplugin](https://www.npmjs.com/package/@gas-pl
   1. `in:inbox category:primary newer_than:3d` を未処理スレッド・処理済みスレッドの2系統で検索（各上限50スレッド）
   2. スレッド内のInbox内メッセージだけを対象にし、Firestore `emails/{messageId}` が未作成のものだけ処理
   3. キーワードマッチでカテゴリ判定（subscription / cancel / inquiry / bug / other）
-  4. Firestore `emails/{messageId}` にupsert（inquiry / bugは初回保存時のみ `draftStatus: "requested"`。
+  4. Firestore `emails/{messageId}` に `documents:commit` で一括upsert
+     （inquiry / bugは初回保存時のみ `draftStatus: "requested"`。
      ただし `SEARCH_WINDOW` より古いメッセージは文脈保存のみ＝`"none"` で下書き生成対象外。
      文脈保存は再浮上した未処理スレッドの直近10件/スレッドまで）
   5. 処理済みスレッドに `secretary-processed` ラベルを付与

@@ -1,6 +1,12 @@
 import { classify } from "./classifier";
 import { getConfig, type Config } from "./config";
-import { countEmailsByCategorySince, getExistingDocIds, upsertDocument } from "./firestore";
+import {
+  commitUpsertDocuments,
+  countEmailsByCategorySince,
+  getExistingDocIds,
+  upsertDocument,
+  type WriteOp,
+} from "./firestore";
 
 const SUMMARY_MAX_LENGTH = 200;
 /** GmailLabel.addToThreads が1回で受け付けるスレッド数の上限 */
@@ -91,15 +97,18 @@ export function runPoll(): void {
     candidates.map((message) => message.getId()),
   );
 
-  let saved = 0;
+  const writes: WriteOp[] = [];
   for (const message of candidates) {
     if (existingIds[message.getId()]) {
       skipped += 1;
     } else {
-      saveEmail(cfg, message, isWithinSearchWindow(message, windowCutoff));
-      saved += 1;
+      writes.push(buildEmailWrite(message, isWithinSearchWindow(message, windowCutoff)));
     }
   }
+
+  // 1件ずつのPATCHでなくdocuments:commitで一括upsertする
+  commitUpsertDocuments(cfg.projectId, "emails", writes);
+  const saved = writes.length;
 
   // ラベルは1スレッドずつでなく一括付与してGmail API呼び出しを減らす。
   // 保存途中の例外停止でラベルが付かなくても、次回巡回の再スキャンと
@@ -160,11 +169,10 @@ function getSearchWindowCutoff(searchWindow: string): Date {
   return cutoff;
 }
 
-function saveEmail(
-  cfg: Config,
+function buildEmailWrite(
   message: GoogleAppsScript.Gmail.GmailMessage,
   withinSearchWindow: boolean,
-): void {
+): WriteOp {
   const subject = message.getSubject();
   const body = message.getPlainBody();
   const category = classify(subject, body);
@@ -175,15 +183,18 @@ function saveEmail(
 
   // docId = GmailのmessageId。既存docはbatchGetの結果で除外するため、
   // Phase3以降のdraftStatusをrequested/noneへ巻き戻さない。
-  upsertDocument(cfg.projectId, "emails", message.getId(), {
-    receivedAt: new Date(message.getDate().getTime()),
-    category,
-    subject,
-    fromAddress: message.getFrom(),
-    summary: buildSummary(body),
-    draftStatus: needsDraft ? "requested" : "none",
-    processedAt: new Date(),
-  });
+  return {
+    docId: message.getId(),
+    data: {
+      receivedAt: new Date(message.getDate().getTime()),
+      category,
+      subject,
+      fromAddress: message.getFrom(),
+      summary: buildSummary(body),
+      draftStatus: needsDraft ? "requested" : "none",
+      processedAt: new Date(),
+    },
+  };
 }
 
 /** Phase 1ではClaude未使用のため、本文冒頭の抜粋をsummaryとする */

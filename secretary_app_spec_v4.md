@@ -256,7 +256,8 @@ knowledgeChunks/{chunkId}
 3. スレッド内のInbox内メッセージだけを対象にし、送信済み返信を除外。
    既存docは documents:batchGet で一括確認して除外（メッセージごとのGETはしない）
 4. 件名・本文からカテゴリを判定（キーワードマッチ）
-5. Firestore REST API で emails コレクションに保存（docId = messageId で upsert）
+5. Firestore REST API で emails コレクションに保存（docId = messageId。
+   documents:commit でまとめて一括upsert）
    - inquiry / bug は draftStatus: "requested" をセット
    - それ以外は draftStatus: "none"
    - 検索期間（SEARCH_WINDOW）より古いメッセージは、再浮上した未処理スレッドの
